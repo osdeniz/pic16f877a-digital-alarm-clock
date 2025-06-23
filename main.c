@@ -34,7 +34,6 @@
 // BUTTON AND OUTPUT DEFINITIONS
 // ============================================================================
 // Input buttons connected to PORTB (with internal pull-ups enabled)
-#define BTN_DEC     PORTBbits.RB0    // Decrement button (active low)
 #define BTN_NEXT    PORTBbits.RB1    // Next/Select button (active low)
 #define BTN_INC     PORTBbits.RB2    // Increment button (active low)
 #define BTN_MODE    PORTBbits.RB3    // Mode switch: 0=Clock setting, 1=Alarm setting
@@ -326,24 +325,6 @@ void main(void) {
                 else if (field == 2) alarm_enabled = !alarm_enabled;     // Alarm on/off
             }
             while (!BTN_NEXT);      // Wait for button release
-            __delay_ms(200);        // Debounce delay
-        }
-
-        // DEC button: Decrement currently selected field
-        if (!BTN_DEC) {
-            if (mode == 0) {        // Clock setting mode
-                if (field == 0) hour = (hour == 0) ? 23 : hour - 1;         // Hours with wrap
-                if (field == 1) minute = (minute == 0) ? 59 : minute - 1;   // Minutes with wrap
-                if (field == 2) second = (second == 0) ? 59 : second - 1;   // Seconds with wrap
-                if (field == 3) date = (date == 1) ? 31 : date - 1;         // Date with wrap
-                if (field == 4) month = (month == 1) ? 12 : month - 1;      // Month with wrap
-                if (field == 5) year = (year == 0) ? 99 : year - 1;         // Year with wrap
-            } else {                // Alarm setting mode
-                if (field == 0) alarm_hour = (alarm_hour == 0) ? 23 : alarm_hour - 1;     // Alarm hours
-                else if (field == 1) alarm_minute = (alarm_minute == 0) ? 59 : alarm_minute - 1; // Alarm minutes
-                else if (field == 2) alarm_enabled = !alarm_enabled;       // Alarm on/off toggle
-            }
-            while (!BTN_DEC);       // Wait for button release
             __delay_ms(200);        // Debounce delay
         }
 
