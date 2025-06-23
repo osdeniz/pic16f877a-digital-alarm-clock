@@ -1,28 +1,32 @@
-# PIC16F877A Digital Alarm Clock
+# PIC16F877A Digital Alarm Clock with DS3232 RTC
 
-A feature-rich digital alarm clock project implemented on the PIC16F877A microcontroller with LCD display and button controls.
+A feature-rich digital alarm clock project implemented on the PIC16F877A microcontroller with external DS3232 RTC module, LCD display and button controls.
 
 ## 🎯 Project Overview
 
-This project implements a complete digital alarm clock system using the PIC16F877A microcontroller. The system features real-time clock functionality, alarm capability, and a user-friendly interface with LCD display and tactile buttons.
+This project implements a complete digital alarm clock system using the PIC16F877A microcontroller and DS3232 external RTC module. The system features real-time clock functionality with high accuracy, alarm capability, and a user-friendly interface with LCD display and tactile buttons.
 
 ## ✨ Features
 
-- **Real-time Clock**: Displays current time (HH:MM:SS) with automatic rollover
-- **Date Display**: Shows current date (DD/MM/YYYY) with basic date tracking
-- **Programmable Alarm**: Set custom alarm time with enable/disable functionality
+- **High-Precision Real-time Clock**: Uses DS3232 RTC module for accurate timekeeping
+- **I2C Communication**: Digital communication with DS3232 RTC module
+- **Persistent Timekeeping**: DS3232 maintains time even when main system is powered off
+- **Date Display**: Shows current date (DD/MM/YYYY) with automatic calendar management
+- **Programmable Alarm**: Set custom alarm time with enable/disable functionality stored in DS3232
 - **Dual Mode Interface**: Switch between clock setting and alarm setting modes
 - **Visual & Audio Feedback**: LED indicator and buzzer for alarm activation
-- **Button-based Navigation**: Intuitive button interface for all operations
+- **Button-based Navigation**: Intuitive 3-button interface for all operations
 - **16x4 LCD Display**: Clear, multi-line information display
+- **Hardware Alarm**: Alarm functionality handled by DS3232 hardware
 
 ## 📋 Hardware Requirements
 
 ### Components
 - **Microcontroller**: PIC16F877A
+- **RTC Module**: DS3232 (I2C interface)
 - **Display**: 16x4 Character LCD (HD44780 compatible)
 - **Crystal Oscillator**: 20MHz
-- **Buttons**: 4 tactile push buttons
+- **Buttons**: 3 tactile push buttons
 - **Output Devices**: 
   - Buzzer for alarm sound
   - LED for visual alarm indication
@@ -41,9 +45,14 @@ RD5 → LCD D6 (Data bit 6)
 RD6 → LCD D7 (Data bit 7)
 ```
 
+#### I2C Connections for DS3232 (PORTC)
+```
+RC3 → DS3232 SCL (I2C Clock)
+RC4 → DS3232 SDA (I2C Data)
+```
+
 #### Button Connections (PORTB)
 ```
-RB0 → Decrement Button (with pull-up)
 RB1 → Next/Select Button (with pull-up)
 RB2 → Increment Button (with pull-up)
 RB3 → Mode Toggle Button (with pull-up)
@@ -59,8 +68,16 @@ RC7 → LED (Alarm Visual Indicator)
 
 ### Power and Clock
 - The PIC16F877A operates at 5V with a 20MHz crystal oscillator
+- DS3232 RTC module operates at 3.3V or 5V
 - Configuration bits are set for high-speed oscillator mode
 - Brown-out reset is enabled for reliable operation
+
+### DS3232 RTC Module
+- High-precision temperature-compensated RTC
+- I2C interface for communication
+- Built-in alarm functionality
+- Battery backup capability for continuous operation
+- ±2ppm accuracy from 0°C to +40°C
 
 ### LCD Interface
 - 4-bit mode operation to save I/O pins
@@ -68,14 +85,14 @@ RC7 → LED (Alarm Visual Indicator)
 - Displays 4 lines of 16 characters each
 
 ### Input Interface
-- Four active-low buttons with internal pull-up resistors enabled
+- Three active-low buttons with internal pull-up resistors enabled
 - Software debouncing implemented for reliable button detection
 - 200ms debounce delay prevents false triggering
 
-### Timer System
-- Timer0 configured with 1:256 prescaler
-- Generates precise 1-second timebase for clock operation
-- Interrupt-driven timekeeping for accurate operation
+### I2C Communication System
+- Software I2C implementation
+- Communicates with DS3232 RTC module
+- Handles BCD to decimal conversion for time/date values
 
 ## 🎮 User Interface
 
@@ -86,7 +103,6 @@ RC7 → LED (Alarm Visual Indicator)
 | **MODE** | Toggle between Clock Setting and Alarm Setting modes |
 | **INC** | Move to next field for editing |
 | **NEXT** | Increment current field value |
-| **DEC** | Decrement current field value |
 
 ### Display Layout
 ```
@@ -117,32 +133,40 @@ Navigate through 3 fields:
 
 ### Main Components
 
-1. **Interrupt Service Routine (ISR)**
-   - Timer0 overflow handler
-   - Generates 1-second timing tick
-   - Non-blocking timekeeping
+1. **I2C Communication Module**
+   - Software I2C implementation
+   - Start/stop condition generation
+   - Read/write byte functions
+   - Communication with DS3232 RTC
 
-2. **LCD Driver Functions**
+2. **DS3232 RTC Driver Functions**
+   - Time and date reading/writing
+   - Alarm configuration
+   - BCD to decimal conversion
+   - Status register management
+
+3. **LCD Driver Functions**
    - 4-bit mode communication
    - Command and data transmission
    - Cursor positioning and display control
 
-3. **User Interface Handler**
+4. **User Interface Handler**
    - Button debouncing and state detection
    - Mode switching and field navigation
    - Value increment/decrement with rollover
 
-4. **Alarm Logic**
-   - Time comparison for alarm triggering
+5. **Alarm Logic**
+   - Hardware alarm detection from DS3232
    - Audio and visual feedback control
-   - Protection against false triggers
+   - Alarm enable/disable management
 
 ### Key Features
 
+- **Hardware RTC**: Dedicated DS3232 for accurate timekeeping
 - **Modular Design**: Separate functions for each major component
-- **Interrupt-Driven**: Non-blocking timekeeping operation
+- **I2C Communication**: Reliable digital communication protocol
+- **Persistent Storage**: Time and alarm settings stored in DS3232
 - **Robust Input Handling**: Comprehensive button debouncing
-- **Safe Operation**: Protection against invalid states
 
 ## 📖 Programming Guide
 
@@ -158,6 +182,9 @@ Navigate through 3 fields:
 #pragma config PWRTE = OFF   // Power-up timer disabled
 #pragma config BOREN = ON    // Brown-out reset enabled
 #pragma config LVP = OFF     // Low voltage programming disabled
+#pragma config CPD = OFF     // EEPROM code protection disabled
+#pragma config WRT = OFF     // Flash memory write protection disabled
+#pragma config CP = OFF      // Code protection disabled
 ```
 
 ### Compilation Notes
@@ -170,8 +197,9 @@ Navigate through 3 fields:
 ### 1. Hardware Setup
 1. Assemble the circuit according to the pin configuration
 2. Connect 20MHz crystal with appropriate capacitors
-3. Ensure proper power supply and decoupling capacitors
-4. Connect LCD with proper contrast adjustment
+3. Connect DS3232 RTC module to I2C pins (RC3/RC4)
+4. Ensure proper power supply and decoupling capacitors
+5. Connect LCD with proper contrast adjustment
 
 ### 2. Software Setup
 1. Install MPLAB X IDE and XC8 compiler
@@ -187,7 +215,7 @@ Navigate through 3 fields:
 
 ### 4. Operation
 1. Power on the system
-2. LCD should display current time and date
+2. LCD should display current time and date from DS3232
 3. Use buttons to navigate and set time/alarm
 4. Test alarm functionality
 
@@ -198,26 +226,34 @@ Navigate through 3 fields:
 | Problem | Possible Causes | Solutions |
 |---------|----------------|-----------|
 | LCD not displaying | Power, connections, contrast | Check wiring, adjust contrast pot |
-| Incorrect time | Crystal frequency, Timer0 config | Verify 20MHz crystal, check config bits |
+| Time not updating | DS3232 connection, I2C issues | Verify I2C wiring, check DS3232 power |
 | Buttons not responding | Pull-ups, debouncing | Enable internal pull-ups, check connections |
-| Alarm not working | Logic error, output connections | Verify alarm time setting, check buzzer/LED |
+| Alarm not working | DS3232 alarm config, output connections | Verify alarm settings, check buzzer/LED |
+| I2C communication error | SDA/SCL connections | Check RC3/RC4 connections, verify DS3232 address |
 
 ### Debug Tips
 - Use debugger/simulator in MPLAB X
 - Add temporary LED indicators for testing
 - Verify configuration bits are properly set
-- Check crystal oscillator startup
+- Check I2C communication with oscilloscope
+- Verify DS3232 power supply and connections
 
 ## 📚 Technical Specifications
 
 ### Timing Accuracy
-- **Crystal**: 20MHz ±20ppm
-- **Timer Resolution**: ~13.1ms per Timer0 overflow
-- **Time Accuracy**: ±1 second per day (crystal dependent)
+- **DS3232 RTC**: ±2ppm accuracy (0°C to +40°C)
+- **Crystal**: 20MHz ±20ppm for microcontroller
+- **Time Accuracy**: ±1 minute per year (DS3232 dependent)
+- **Temperature Compensation**: Automatic in DS3232
 
 ### Power Consumption
-- **Active Mode**: ~20mA @ 5V (LCD backlight dependent)
+- **Active Mode**: ~25mA @ 5V (LCD backlight dependent)
+- **DS3232**: ~2µA in battery backup mode
 - **Sleep Mode**: Not implemented (continuous operation)
+
+### Communication
+- **I2C Speed**: ~100kHz (software implementation)
+- **DS3232 Address**: 0xD0 (write) / 0xD1 (read)
 
 ### Environmental Conditions
 - **Operating Temperature**: 0°C to +70°C
@@ -227,12 +263,12 @@ Navigate through 3 fields:
 ## 🔮 Future Enhancements
 
 Potential improvements for the project:
-- **DS3231 RTC Integration**: Add external RTC for better accuracy
-- **Battery Backup**: Maintain time during power outages
-- **Multiple Alarms**: Support for several independent alarms
+- **Battery Backup**: Add coin cell battery to DS3232 for power-off timekeeping
+- **Multiple Alarms**: Support for DS3232's second alarm functionality
 - **Snooze Function**: Temporary alarm disable with auto-reactivation
-- **Temperature Display**: Add DS18B20 temperature sensor
+- **Temperature Display**: Utilize DS3232's built-in temperature sensor
 - **Remote Control**: IR remote for convenient operation
+- **Data Logging**: Store alarm history in EEPROM
 
 ## 📄 License
 
@@ -250,4 +286,4 @@ For questions or support regarding this project, please create an issue in the r
 
 **Project Status**: ✅ Stable and fully functional  
 **Last Updated**: 2024  
-**Version**: 1.0 
+**Version**: 2.0 (DS3232 Implementation) 
