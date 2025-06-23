@@ -17,6 +17,32 @@
 #define _XTAL_FREQ 20000000  // 20MHz oscillator frequency for delay calculations
 
 // ============================================================================
+// DS3232 RTC MODULE DEFINITIONS
+// ============================================================================
+#define DS3232_ADDRESS 0xD0  // DS3232 I2C slave address (write address)
+#define DS3232_READ    0xD1  // DS3232 I2C read address
+
+// DS3232 Register addresses
+#define DS3232_SECONDS    0x00
+#define DS3232_MINUTES    0x01
+#define DS3232_HOURS      0x02
+#define DS3232_DAY        0x03
+#define DS3232_DATE       0x04
+#define DS3232_MONTH      0x05
+#define DS3232_YEAR       0x06
+#define DS3232_ALARM1_SEC 0x07
+#define DS3232_ALARM1_MIN 0x08
+#define DS3232_ALARM1_HOUR 0x09
+#define DS3232_CONTROL    0x0E
+#define DS3232_STATUS     0x0F
+
+// I2C pins for DS3232 communication
+#define SDA_PIN         TRISCbits.TRISC4
+#define SCL_PIN         TRISCbits.TRISC3
+#define SDA_DATA        PORTCbits.RC4
+#define SCL_DATA        PORTCbits.RC3
+
+// ============================================================================
 // LCD DISPLAY CONFIGURATION (16x4 Character LCD in 4-bit mode)
 // ============================================================================
 // LCD control pins connected to PORTD
@@ -45,13 +71,13 @@
 // ============================================================================
 // GLOBAL VARIABLES - System state and time keeping
 // ============================================================================
-// Current time variables (volatile because modified in interrupt)
-volatile uint8_t hour = 0, minute = 0, second = 0;
+// Current time variables (read from DS3232)
+uint8_t hour = 0, minute = 0, second = 0;
 
-// Current date variables
+// Current date variables (read from DS3232)
 uint8_t date = 1, month = 1, year = 0;  // Year is 2-digit (20xx)
 
-// Alarm time settings
+// Alarm time settings (stored in DS3232 alarm registers)
 uint8_t alarm_hour = 0, alarm_minute = 0;  // Default alarm at 00:00
 
 // User interface state variables
@@ -59,9 +85,6 @@ uint8_t field = 0;          // Currently selected field for editing (0-5)
 uint8_t mode = 0;           // Current mode: 0=Clock setting, 1=Alarm setting
 uint8_t alarm_triggered = 0; // Flag indicating if alarm is currently active
 uint8_t alarm_enabled = 1;   // Flag to enable/disable alarm functionality
-
-// Timer variables
-volatile uint8_t tick_1s = 0; // Flag set every second by Timer0 interrupt
 
 // ============================================================================
 // LCD DISPLAY BUFFERS - Formatted strings for display
@@ -73,6 +96,26 @@ char alarm_str[17];   // Buffer for alarm status string
 // ============================================================================
 // FUNCTION PROTOTYPES
 // ============================================================================
+// I2C communication functions for DS3232
+void i2c_init(void);
+void i2c_start(void);
+void i2c_stop(void);
+void i2c_write(uint8_t data);
+uint8_t i2c_read(uint8_t ack);
+void i2c_write_byte(uint8_t address, uint8_t reg, uint8_t data);
+uint8_t i2c_read_byte(uint8_t address, uint8_t reg);
+
+// DS3232 RTC functions
+void ds3232_init(void);
+void ds3232_set_time(uint8_t hour, uint8_t minute, uint8_t second);
+void ds3232_set_date(uint8_t date, uint8_t month, uint8_t year);
+void ds3232_read_time(void);
+void ds3232_read_date(void);
+void ds3232_set_alarm(uint8_t hour, uint8_t minute);
+uint8_t ds3232_check_alarm(void);
+uint8_t bcd_to_dec(uint8_t bcd);
+uint8_t dec_to_bcd(uint8_t dec);
+
 // LCD low-level functions
 void lcd_send_nibble(uint8_t nibble);  // Send 4 bits to LCD data pins
 void lcd_cmd(uint8_t cmd);             // Send command to LCD
@@ -81,6 +124,191 @@ void lcd_init(void);                   // Initialize LCD in 4-bit mode
 void lcd_puts(const char *s);          // Display string on LCD
 void lcd_gotoxy(uint8_t x, uint8_t y); // Set cursor position
 void lcd_clear(void);                  // Clear LCD display
+
+// ============================================================================
+// I2C COMMUNICATION FUNCTIONS FOR DS3232
+// ============================================================================
+
+// Initialize I2C hardware for DS3232 communication
+void i2c_init(void) {
+    SDA_PIN = 1;    // Set SDA as input (open-drain)
+    SCL_PIN = 1;    // Set SCL as input (open-drain)
+    SDA_DATA = 1;   // SDA high
+    SCL_DATA = 1;   // SCL high
+}
+
+// Generate I2C start condition
+void i2c_start(void) {
+    SDA_PIN = 0; SDA_DATA = 1;  // SDA high
+    SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+    __delay_us(5);
+    SDA_PIN = 0; SDA_DATA = 0;  // SDA low while SCL high
+    __delay_us(5);
+    SCL_PIN = 0; SCL_DATA = 0;  // SCL low
+    __delay_us(5);
+}
+
+// Generate I2C stop condition
+void i2c_stop(void) {
+    SDA_PIN = 0; SDA_DATA = 0;  // SDA low
+    SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+    __delay_us(5);
+    SDA_PIN = 0; SDA_DATA = 1;  // SDA high while SCL high
+    __delay_us(5);
+}
+
+// Write 8 bits to I2C bus
+void i2c_write(uint8_t data) {
+    for(uint8_t i = 0; i < 8; i++) {
+        if(data & 0x80) {
+            SDA_PIN = 1;  // SDA high
+        } else {
+            SDA_PIN = 0; SDA_DATA = 0;  // SDA low
+        }
+        __delay_us(2);
+        SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+        __delay_us(5);
+        SCL_PIN = 0; SCL_DATA = 0;  // SCL low
+        __delay_us(2);
+        data <<= 1;
+    }
+    
+    // Read ACK
+    SDA_PIN = 1;  // Release SDA
+    __delay_us(2);
+    SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+    __delay_us(5);
+    SCL_PIN = 0; SCL_DATA = 0;  // SCL low
+    __delay_us(2);
+}
+
+// Read 8 bits from I2C bus
+uint8_t i2c_read(uint8_t ack) {
+    uint8_t data = 0;
+    SDA_PIN = 1;  // Release SDA for reading
+    
+    for(uint8_t i = 0; i < 8; i++) {
+        data <<= 1;
+        SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+        __delay_us(5);
+        if(SDA_DATA) data |= 1;
+        SCL_PIN = 0; SCL_DATA = 0;  // SCL low
+        __delay_us(5);
+    }
+    
+    // Send ACK/NACK
+    if(ack) {
+        SDA_PIN = 0; SDA_DATA = 0;  // ACK (SDA low)
+    } else {
+        SDA_PIN = 0; SDA_DATA = 1;  // NACK (SDA high)
+    }
+    __delay_us(2);
+    SCL_PIN = 0; SCL_DATA = 1;  // SCL high
+    __delay_us(5);
+    SCL_PIN = 0; SCL_DATA = 0;  // SCL low
+    __delay_us(2);
+    
+    return data;
+}
+
+// Write single byte to DS3232 register
+void i2c_write_byte(uint8_t address, uint8_t reg, uint8_t data) {
+    i2c_start();
+    i2c_write(address);     // Device address
+    i2c_write(reg);         // Register address
+    i2c_write(data);        // Data
+    i2c_stop();
+}
+
+// Read single byte from DS3232 register
+uint8_t i2c_read_byte(uint8_t address, uint8_t reg) {
+    uint8_t data;
+    
+    i2c_start();
+    i2c_write(address);     // Device address (write)
+    i2c_write(reg);         // Register address
+    
+    i2c_start();            // Repeated start
+    i2c_write(address | 1); // Device address (read)
+    data = i2c_read(0);     // Read data with NACK
+    i2c_stop();
+    
+    return data;
+}
+
+// ============================================================================
+// DS3232 RTC FUNCTIONS
+// ============================================================================
+
+// Convert BCD to decimal
+uint8_t bcd_to_dec(uint8_t bcd) {
+    return ((bcd >> 4) * 10) + (bcd & 0x0F);
+}
+
+// Convert decimal to BCD
+uint8_t dec_to_bcd(uint8_t dec) {
+    return ((dec / 10) << 4) + (dec % 10);
+}
+
+// Initialize DS3232 RTC module
+void ds3232_init(void) {
+    // Enable oscillator and disable alarms initially
+    i2c_write_byte(DS3232_ADDRESS, DS3232_CONTROL, 0x04);  // Enable oscillator, disable alarms
+    i2c_write_byte(DS3232_ADDRESS, DS3232_STATUS, 0x00);   // Clear status register
+}
+
+// Set time in DS3232
+void ds3232_set_time(uint8_t hour, uint8_t minute, uint8_t second) {
+    i2c_write_byte(DS3232_ADDRESS, DS3232_SECONDS, dec_to_bcd(second));
+    i2c_write_byte(DS3232_ADDRESS, DS3232_MINUTES, dec_to_bcd(minute));
+    i2c_write_byte(DS3232_ADDRESS, DS3232_HOURS, dec_to_bcd(hour));
+}
+
+// Set date in DS3232
+void ds3232_set_date(uint8_t date, uint8_t month, uint8_t year) {
+    i2c_write_byte(DS3232_ADDRESS, DS3232_DATE, dec_to_bcd(date));
+    i2c_write_byte(DS3232_ADDRESS, DS3232_MONTH, dec_to_bcd(month));
+    i2c_write_byte(DS3232_ADDRESS, DS3232_YEAR, dec_to_bcd(year));
+}
+
+// Read current time from DS3232
+void ds3232_read_time(void) {
+    second = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_SECONDS) & 0x7F);
+    minute = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_MINUTES) & 0x7F);
+    hour = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_HOURS) & 0x3F);
+}
+
+// Read current date from DS3232
+void ds3232_read_date(void) {
+    date = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_DATE) & 0x3F);
+    month = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_MONTH) & 0x1F);
+    year = bcd_to_dec(i2c_read_byte(DS3232_ADDRESS, DS3232_YEAR));
+}
+
+// Set alarm time in DS3232
+void ds3232_set_alarm(uint8_t hour, uint8_t minute) {
+    i2c_write_byte(DS3232_ADDRESS, DS3232_ALARM1_SEC, 0x00);  // 00 seconds
+    i2c_write_byte(DS3232_ADDRESS, DS3232_ALARM1_MIN, dec_to_bcd(minute));
+    i2c_write_byte(DS3232_ADDRESS, DS3232_ALARM1_HOUR, dec_to_bcd(hour));
+    
+    // Enable alarm 1 interrupt
+    if(alarm_enabled) {
+        i2c_write_byte(DS3232_ADDRESS, DS3232_CONTROL, 0x05);  // Enable alarm 1 interrupt
+    } else {
+        i2c_write_byte(DS3232_ADDRESS, DS3232_CONTROL, 0x04);  // Disable alarm 1 interrupt
+    }
+}
+
+// Check if alarm is triggered
+uint8_t ds3232_check_alarm(void) {
+    uint8_t status = i2c_read_byte(DS3232_ADDRESS, DS3232_STATUS);
+    if(status & 0x01) {  // Alarm 1 flag set
+        // Clear alarm flag
+        i2c_write_byte(DS3232_ADDRESS, DS3232_STATUS, status & 0xFE);
+        return 1;
+    }
+    return 0;
+}
 
 // ============================================================================
 // DISPLAY UPDATE FUNCTION
@@ -109,28 +337,6 @@ void lcd_display_all(void) {
     // Display current setting mode on line 3
     lcd_gotoxy(0, 3);
     lcd_puts(mode == 0 ? "SETTING: CLOCK" : "SETTING: ALARM");
-}
-
-// ============================================================================
-// TIMER0 INTERRUPT SERVICE ROUTINE
-// ============================================================================
-// Timer0 generates interrupts every ~13.1ms (with 256 prescaler)
-// 76 interrupts = approximately 1 second
-// This provides the timebase for the digital clock
-void __interrupt() isr(void) {
-    static uint8_t count = 0;  // Counter for 1-second timing
-    
-    if (TMR0IF) {              // Timer0 overflow interrupt flag
-        TMR0IF = 0;            // Clear interrupt flag
-        TMR0 = 6;              // Reload timer for precise timing
-        count++;
-        
-        // Generate 1-second tick
-        if (count >= 76) {
-            count = 0;
-            tick_1s = 1;       // Set flag for main loop
-        }
-    }
 }
 
 // ============================================================================
@@ -231,18 +437,13 @@ void main(void) {
     OPTION_REGbits.nRBPU = 0;  // Enable PORTB pull-ups
 
     // ========================================================================
-    // TIMER0 CONFIGURATION (1-second timebase generation)
+    // I2C AND DS3232 INITIALIZATION
     // ========================================================================
-    OPTION_REGbits.T0CS = 0;   // Timer0 source = internal clock (Fosc/4)
-    OPTION_REGbits.PSA = 0;    // Prescaler assigned to Timer0
-    OPTION_REGbits.PS = 0b111; // Prescaler 1:256
-    // Timer0 frequency = 20MHz/4/256 = 19.53kHz
-    // Overflow period = 256/19.53kHz = 13.1ms
+    i2c_init();                // Initialize I2C communication
+    ds3232_init();             // Initialize DS3232 RTC module
     
-    TMR0 = 6;                  // Preload timer for precise 1-second timing
-    TMR0IE = 1;                // Enable Timer0 interrupt
-    PEIE = 1;                  // Enable peripheral interrupts
-    GIE = 1;                   // Enable global interrupts
+    // Set initial alarm time in DS3232
+    ds3232_set_alarm(alarm_hour, alarm_minute);
 
     // ========================================================================
     // LCD INITIALIZATION AND STARTUP
@@ -255,35 +456,10 @@ void main(void) {
     // ========================================================================
     while(1) {
         // ====================================================================
-        // TIME KEEPING (1-second tick processing)
+        // TIME READING FROM DS3232
         // ====================================================================
-        if (tick_1s) {
-            tick_1s = 0;            // Clear 1-second flag
-            second++;               // Increment seconds
-            
-            // Handle time rollover (seconds -> minutes -> hours -> days)
-            if (second >= 60) {
-                second = 0;
-                minute++;
-                if (minute >= 60) {
-                    minute = 0;
-                    hour++;
-                    if (hour >= 24) {
-                        hour = 0;
-                        date++;
-                        // Simple date handling (no leap year or month-specific days)
-                        if (date > 31) {
-                            date = 1;
-                            month++;
-                            if (month > 12) {
-                                month = 1;
-                                year = (year + 1) % 100;  // 2-digit year wrap
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        ds3232_read_time();     // Read current time from DS3232
+        ds3232_read_date();     // Read current date from DS3232
 
         // Update LCD display with current values
         lcd_display_all();
@@ -313,36 +489,62 @@ void main(void) {
         // NEXT button: Increment currently selected field
         if (!BTN_NEXT) {
             if (mode == 0) {        // Clock setting mode
-                if (field == 0) hour = (hour + 1) % 24;           // Hours (0-23)
-                if (field == 1) minute = (minute + 1) % 60;       // Minutes (0-59)
-                if (field == 2) second = (second + 1) % 60;       // Seconds (0-59)
-                if (field == 3) date = (date % 31) + 1;           // Date (1-31)
-                if (field == 4) month = (month % 12) + 1;         // Month (1-12)
-                if (field == 5) year = (year + 1) % 100;          // Year (0-99)
+                if (field == 0) {
+                    hour = (hour + 1) % 24;           // Hours (0-23)
+                    ds3232_set_time(hour, minute, second);  // Update DS3232
+                }
+                if (field == 1) {
+                    minute = (minute + 1) % 60;       // Minutes (0-59)
+                    ds3232_set_time(hour, minute, second);  // Update DS3232
+                }
+                if (field == 2) {
+                    second = (second + 1) % 60;       // Seconds (0-59)
+                    ds3232_set_time(hour, minute, second);  // Update DS3232
+                }
+                if (field == 3) {
+                    date = (date % 31) + 1;           // Date (1-31)
+                    ds3232_set_date(date, month, year);     // Update DS3232
+                }
+                if (field == 4) {
+                    month = (month % 12) + 1;         // Month (1-12)
+                    ds3232_set_date(date, month, year);     // Update DS3232
+                }
+                if (field == 5) {
+                    year = (year + 1) % 100;          // Year (0-99)
+                    ds3232_set_date(date, month, year);     // Update DS3232
+                }
             } else {                // Alarm setting mode
-                if (field == 0) alarm_hour = (alarm_hour + 1) % 24;      // Alarm hours
-                else if (field == 1) alarm_minute = (alarm_minute + 1) % 60; // Alarm minutes
-                else if (field == 2) alarm_enabled = !alarm_enabled;     // Alarm on/off
+                if (field == 0) {
+                    alarm_hour = (alarm_hour + 1) % 24;      // Alarm hours
+                    ds3232_set_alarm(alarm_hour, alarm_minute); // Update DS3232 alarm
+                }
+                else if (field == 1) {
+                    alarm_minute = (alarm_minute + 1) % 60; // Alarm minutes
+                    ds3232_set_alarm(alarm_hour, alarm_minute); // Update DS3232 alarm
+                }
+                else if (field == 2) {
+                    alarm_enabled = !alarm_enabled;     // Alarm on/off
+                    ds3232_set_alarm(alarm_hour, alarm_minute); // Update DS3232 alarm
+                }
             }
             while (!BTN_NEXT);      // Wait for button release
             __delay_ms(200);        // Debounce delay
         }
 
         // ====================================================================
-        // ALARM LOGIC
+        // ALARM LOGIC USING DS3232
         // ====================================================================
-        // Check if alarm should trigger (with protection against 00:00 default)
-        if (alarm_enabled &&
-            !(alarm_hour == 0 && alarm_minute == 0) &&  // Prevent trigger at default 00:00
-            hour == alarm_hour && minute == alarm_minute) {
+        // Check if alarm is triggered by DS3232
+        if (alarm_enabled && ds3232_check_alarm()) {
             alarm_triggered = 1;    // Set alarm active flag
             ALARM_OUT = 1;          // Turn on buzzer
             ALARM_LED = 1;          // Turn on alarm LED
-        } else {
+        } else if (!alarm_enabled) {
+            alarm_triggered = 0;
             ALARM_OUT = 0;          // Turn off buzzer
             ALARM_LED = 0;          // Turn off alarm LED
         }
 
-        __delay_ms(50);             // Main loop delay for stable operation
+        __delay_ms(100);            // Main loop delay for stable operation
     }
 }
